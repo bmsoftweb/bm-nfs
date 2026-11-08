@@ -8,6 +8,7 @@ import { DateField } from './DateField';
 import { NumberField } from './NumberField';
 import { Toggle } from './Toggle';
 import { CampoCodigo, useCodigosServico } from './CampoCodigo';
+import { useProgresso } from './ProgressoModal';
 import { formatarCpfCnpj, formatarMoeda, formatarNbs, formatarServico } from '../utils/formatters';
 
 const so = (v: string, max: number) => v.replace(/\D/g, '').slice(0, max);
@@ -41,6 +42,7 @@ export const NovaNFSeView: React.FC<{
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState<'gravar' | 'emitir' | null>(null);
   const codigos = useCodigosServico(dados?.codigoServico ?? '');
+  const progresso = useProgresso();
 
   useEffect(() => {
     api
@@ -95,7 +97,11 @@ export const NovaNFSeView: React.FC<{
     try {
       // Sem nome nem documento, a nota sai sem tomador
       const comTomador = t.documento || t.nome;
-      const { nota } = await api.emitirNota({ ...dados, tomador: comTomador ? t : null }, soGravar);
+      const { nota } = await progresso.aguardar(
+        soGravar ? 'Gravando a NFS-e' : 'Emitindo a NFS-e',
+        soGravar ? 'Validando e assinando a DPS…' : 'Assinando e transmitindo a DPS à Sefin Nacional…',
+        () => api.emitirNota({ ...dados, tomador: comTomador ? t : null }, soGravar),
+      );
       if (soGravar) {
         onEmitida(nota.id, `DPS ${nota.serie}/${nota.numero_dps} gravada. Transmita quando quiser.`);
       } else if (nota.situacao === 'rejeitada') {
@@ -118,6 +124,7 @@ export const NovaNFSeView: React.FC<{
   return (
     <form onSubmit={emitir} className="flex flex-col">
       {erro && <AvisoErro mensagem={erro} onFechar={() => setErro(null)} />}
+      {progresso.modal}
 
       <Secao titulo="Tomador" descricao="Deixe em branco para emitir sem tomador identificado">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">

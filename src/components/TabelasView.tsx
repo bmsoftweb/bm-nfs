@@ -4,6 +4,7 @@ import * as api from '../services/api';
 import { Botao, Etiqueta, Secao } from './ui';
 import { AvisoErro, AvisoSucesso } from './AvisoErro';
 import { ColunaGrade, Grade } from './Grade';
+import { useProgresso } from './ProgressoModal';
 import { formatarData, formatarDataHora, formatarMoeda, formatarNbs, formatarServico } from '../utils/formatters';
 
 type NomeTabela = api.SituacaoTabela['nome'];
@@ -26,6 +27,7 @@ export const TabelasView: React.FC = () => {
   const [feito, setFeito] = useState<string | null>(null);
   const [abertas, setAbertas] = useState<NomeTabela[]>([]);
   const [ativa, setAtiva] = useState<'tabelas' | NomeTabela>('tabelas');
+  const progresso = useProgresso();
 
   const ver = (nome: NomeTabela) => {
     setAbertas((a) => (a.includes(nome) ? a : [...a, nome]));
@@ -45,7 +47,7 @@ export const TabelasView: React.FC = () => {
     setBaixando(nome);
     setErro(null);
     try {
-      const r = await api.atualizarTabela(nome);
+      const r = await progresso.acompanhar(`Atualizando: ${TITULOS[nome]}`, (aoAvancar) => api.atualizarTabela(nome, aoAvancar));
       setFeito(`${TITULOS[nome]} atualizado: ${r.total.toLocaleString('pt-BR')} códigos (${r.versao}).`);
       await ler();
     } catch (e: any) {
@@ -61,6 +63,7 @@ export const TabelasView: React.FC = () => {
     <div className="flex-1 flex flex-col min-h-0">
       {erro && <AvisoErro mensagem={erro} onFechar={() => setErro(null)} />}
       {feito && <AvisoSucesso mensagem={feito} onFechar={() => setFeito(null)} />}
+      {progresso.modal}
 
       {abertas.length > 0 && (
         <div className="flex items-stretch bg-stone-100 dark:bg-stone-950 border-b border-stone-200 dark:border-stone-800 overflow-x-auto overflow-y-hidden shrink-0">

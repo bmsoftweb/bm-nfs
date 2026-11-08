@@ -40,6 +40,25 @@ export function rota(handler: (req: Request, res: Response) => Promise<any>) {
   };
 }
 
+/** Etapa de uma ação longa: texto e quanto já foi feito (total 0 = sem contagem) */
+export type Progresso = (etapa: string, feitos?: number, total?: number) => void;
+
+/**
+ * Rota longa que conta o andamento (ProgressoModal na tela): responde em linhas JSON
+ * {etapa, feitos, total} enquanto trabalha e termina com {ok: resultado} ou {erro: mensagem}.
+ */
+export function rotaProgresso(fn: (progresso: Progresso, req: Request) => Promise<unknown>) {
+  return (req: Request, res: Response) => {
+    res.status(200).set({ 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
+    res.flushHeaders();
+    const linha = (o: unknown) => res.write(`${JSON.stringify(o)}\n`);
+    fn((etapa, feitos = 0, total = 0) => linha({ etapa, feitos, total }), req)
+      .then((r) => linha({ ok: r ?? true }))
+      .catch((err: any) => linha({ erro: err?.message || 'Erro inesperado.' }))
+      .finally(() => res.end());
+  };
+}
+
 /**
  * Listagem paginada das grades: página, registros por página, busca e ordenação
  * vêm da tela, mas só por nomes da whitelist.
@@ -248,9 +267,7 @@ export function criarRotasNFSe(): Router {
     res.json(await situacaoTabelas(empresaDaRequisicao(req)));
   }));
 
-  r.post('/tabelas/:nome/atualizar', rota(async (req, res) => {
-    res.json(await atualizarTabela(req.params.nome, empresaDaRequisicao(req)));
-  }));
+  r.post('/tabelas/:nome/atualizar', rotaProgresso(async (progresso, req) => atualizarTabela(req.params.nome, empresaDaRequisicao(req), progresso)));
 
   const todas = async (): Promise<[string, unknown[]]> => ['1 = 1', []];
 

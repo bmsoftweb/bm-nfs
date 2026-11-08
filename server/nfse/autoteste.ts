@@ -9,6 +9,7 @@ import { CONFIG_PADRAO } from '../config.js';
 import { conferirAssinatura, assinar } from './assinatura.js';
 import type { CertificadoCarregado } from './certificado.js';
 import type { Contexto, Prestador } from './contexto.js';
+import { gerarDanfse } from './danfse.js';
 import { conferirDados, DadosNFSe, idDps, montarCancelamento, montarDps } from './dps.js';
 import { compactar, descompactar } from './sefin.js';
 import { descreverErros, validarDps, validarPedidoEvento } from './validacao.js';
@@ -118,6 +119,18 @@ async function main() {
 
   // Quebra de linha da descrição chega intacta ao XML
   assert.match(montarDps(ctx(2), 1, 1, completa).xml, /informática\nReferente/);
+
+  // DANFSe (NT 008): sempre uma página A4, com ou sem tomador, cancelada ou não
+  const nfse = (dados: DadosNFSe) =>
+    `<NFSe versao="1.01" xmlns="http://www.sped.fazenda.gov.br/nfse"><infNFSe Id="NFS${'4'.repeat(50)}">` +
+    '<xLocEmi>Rio do Sul</xLocEmi><nNFSe>1</nNFSe><cStat>100</cStat><emit><enderNac><UF>SC</UF></enderNac></emit>' +
+    `${montarDps(ctx(2), 1, 21, dados).xml.replace(/<\?xml[^?]*\?>/, '')}</infNFSe></NFSe>`;
+  for (const [dados, cancelada] of [[completa, false], [{ ...completa, tomador: null, issRetido: false, descricao: 'x '.repeat(900) }, true]] as const) {
+    const pdf = await gerarDanfse(nfse(dados), { cancelada });
+    assert.equal(pdf.subarray(0, 5).toString('latin1'), '%PDF-');
+    assert.equal(pdf.toString('latin1').match(/\/Type \/Page\b/g)?.length, 1, 'DANFSe em uma página só');
+  }
+  await assert.rejects(gerarDanfse('<NFSe/>'), /não contém uma NFS-e/);
 
   if (process.argv.includes('--mostrar')) console.log(montarDps(ctx(2), 1, 21, completa).xml.replace(/></g, '>\n<'));
   console.log('Autoteste da DPS: ok');

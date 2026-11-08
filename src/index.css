@@ -82,3 +82,9 @@ html, body {
 .campo-altura :is(input:not([type='file']), select, textarea) {
   height: var(--altura);
 }
+
+/* Barra de progresso sem total (ProgressoModal) */
+@keyframes progresso {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}

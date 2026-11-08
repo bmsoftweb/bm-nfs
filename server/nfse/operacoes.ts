@@ -8,6 +8,7 @@
 import { pool } from '../db.js';
 import { assinar } from './assinatura.js';
 import { Contexto, montarContexto, registrarLog } from './contexto.js';
+import { gerarDanfse } from './danfse.js';
 import { dataHoraMysql } from './datas.js';
 import { conferirDados, DadosNFSe, montarCancelamento, montarDps } from './dps.js';
 import * as sefin from './sefin.js';
@@ -241,19 +242,24 @@ export async function cancelar(empresaId: number, notaId: number, cMotivo: strin
 }
 
 // ---------------------------------------------------------------------------
-// DANFSe (o PDF oficial, gerado pelo ADN)
+// DANFSe: gerado aqui a partir do XML autorizado (a API do ADN foi suspensa pela NT 008)
 // ---------------------------------------------------------------------------
+
+/** Nome e UF pelo código IBGE (cad_cidades); sem a tabela, o DANFSe sai com o código */
+async function nomesMunicipios(codigos: string[]) {
+  try {
+    const [linhas] = await pool.query<any[]>('SELECT codigo_ibge, nome, uf FROM cad_cidades WHERE codigo_ibge IN (?)', [codigos]);
+    return Object.fromEntries(linhas.map((l) => [String(l.codigo_ibge), { nome: l.nome, uf: l.uf }]));
+  } catch {
+    return {};
+  }
+}
 
 export async function danfse(empresaId: number, notaId: number): Promise<{ pdf: Buffer; nome: string }> {
   const nota = await buscarNota(empresaId, notaId);
-  if (!nota.chave) throw new Error('A nota ainda não tem chave: só a NFS-e autorizada tem DANFSe.');
-  const ctx = await contextoDaNota(empresaId, nota);
-
-  const r = await sefin.obterDanfse(ctx, nota.chave);
-  if (r.pdf) return { pdf: r.pdf, nome: `NFSe_${nota.numero_nfse || nota.chave}.pdf` };
-
-  await logar(ctx, 'DANFSe', { url: r.url, retorno: r.retorno! }, nota.chave);
-  throw new Error(sefin.descreverMensagens(r.retorno!.erros) || 'O ADN não devolveu o PDF.');
+  if (!nota.xml_nfse) throw new Error('Só a NFS-e autorizada tem DANFSe.');
+  const pdf = await gerarDanfse(nota.xml_nfse, { cancelada: nota.situacao === 'cancelada', municipios: nomesMunicipios });
+  return { pdf, nome: `NFSe_${nota.numero_nfse || nota.chave}.pdf` };
 }
 
 export { buscarNota };

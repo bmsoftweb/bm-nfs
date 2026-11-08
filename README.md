@@ -7,7 +7,8 @@ TypeScript. O protocolo segue o `PadraoNacional.Provider` do ACBr:
 - a DPS (layout 1.01) é assinada com o A1 do prestador (RSA-SHA1, C14N), compactada
   em gzip e enviada em base64 dentro de um JSON (`POST /nfse`);
 - todas as chamadas usam TLS mútuo com o mesmo certificado;
-- o DANFSe é o PDF oficial do ADN (`GET /danfse/{chave}`);
+- o DANFSe é gerado aqui, a partir do XML autorizado, no leiaute da NT 008 (a API
+  `GET /danfse/{chave}` do ADN foi suspensa em 03/08/2026);
 - cancelamento pelo evento e101101 (`POST /nfse/{chave}/eventos`).
 
 A produção restrita já está na NT 009 (`finNFSe`, ordem nova de `cServ`) e a produção
@@ -39,7 +40,7 @@ npm run dev
 ```
 
 Autoteste (monta, assina e valida a DPS e o cancelamento contra o XSD dos dois ambientes,
-sem banco e sem rede):
+e gera o DANFSe de uma página, sem banco e sem rede):
 
 ```bash
 npm run teste

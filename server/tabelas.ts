@@ -8,6 +8,7 @@ import { pool } from './db.js';
 import { dataHoraMysql, dataISO } from './nfse/datas.js';
 import { carregarPrestador, montarContexto } from './nfse/contexto.js';
 import { consultarAliquotaMunicipal } from './nfse/sefin.js';
+import type { Progresso } from './rotas/nfse.js';
 
 /** Documentação atual da NFS-e: lá sai cada versão do Anexo B (lista nacional e NBS) */
 const PAGINA_DOCUMENTACAO = 'https://www.gov.br/nfse/pt-br/biblioteca/documentacao-tecnica/documentacao-atual';
@@ -49,10 +50,10 @@ export async function situacaoTabelas(empresaId: number) {
   return lista;
 }
 
-export async function atualizarTabela(nome: string, empresaId: number): Promise<{ total: number; versao: string }> {
-  if (nome === 'nacionais') return atualizarNacionais();
-  if (nome === 'nbs') return atualizarNbs();
-  if (nome === 'municipais') return atualizarMunicipais(empresaId);
+export async function atualizarTabela(nome: string, empresaId: number, progresso: Progresso = () => {}): Promise<{ total: number; versao: string }> {
+  if (nome === 'nacionais') return atualizarNacionais(progresso);
+  if (nome === 'nbs') return atualizarNbs(progresso);
+  if (nome === 'municipais') return atualizarMunicipais(empresaId, progresso);
   throw new Error(`Tabela "${nome}" desconhecida.`);
 }
 
@@ -167,7 +168,8 @@ async function anexoB() {
   return planilhaDaPagina(PAGINA_DOCUMENTACAO, /anexo_?b[^/]*\.xlsx$/i, 'Anexo B (Lista de Serviços Nacional e NBS)');
 }
 
-async function atualizarNacionais() {
+async function atualizarNacionais(progresso: Progresso) {
+  progresso('Baixando o Anexo B do gov.br…');
   const { xlsx, arquivo } = await anexoB();
   const [cab, ...corpo] = lerAba(xlsx, 'LISTA.SERV.NAC.');
   const [cItem, cSub, cDesd, cDesc] = colunas(cab, 'da Lista de Serviços Nacional', ['ITEM', 'SUBITEM', 'DESDOBRO', 'DESCRI']);
@@ -178,11 +180,13 @@ async function atualizarNacionais() {
     .map((l) => [`${dois(l[cItem])}${dois(l[cSub])}${dois(l[cDesd])}`, l[cDesc], agora, agora]);
   if (linhas.length < 300) throw new Error(`A Lista de Serviços Nacional veio com só ${linhas.length} códigos: nada foi gravado.`);
 
+  progresso(`Gravando ${linhas.length} códigos…`);
   await gravar([{ apagar: 'DELETE FROM nfs_servicos_nacionais', inserir: 'INSERT INTO nfs_servicos_nacionais (codigo, descricao, criado_em, atualizado_em) VALUES ?', linhas }]);
   return { total: linhas.length, versao: arquivo };
 }
 
-async function atualizarNbs() {
+async function atualizarNbs(progresso: Progresso) {
+  progresso('Baixando os Anexos B e VIII do gov.br…');
   const [b, viii] = await Promise.all([
     anexoB(),
     planilhaDaPagina(PAGINA_RTC, /anexo_?viii[^/]*\.xlsx$/i, 'Anexo VIII (correlação item da LC 116 x NBS)'),
@@ -211,6 +215,7 @@ async function atualizarNbs() {
   if (pares.size < 300) throw new Error(`O Anexo VIII veio com só ${pares.size} correlações: nada foi gravado.`);
   const itens = [...pares].map((p) => [p.slice(0, 4), p.slice(4), agora, agora]);
 
+  progresso(`Gravando ${nbs.length} códigos e ${itens.length} correlações…`);
   await gravar([
     { apagar: 'DELETE FROM nfs_nbs', inserir: 'INSERT INTO nfs_nbs (codigo, descricao, criado_em, atualizado_em) VALUES ?', linhas: nbs },
     { apagar: 'DELETE FROM nfs_nbs_itens', inserir: 'INSERT INTO nfs_nbs_itens (item, nbs, criado_em, atualizado_em) VALUES ?', linhas: itens },
@@ -225,7 +230,7 @@ async function atualizarNbs() {
 /** "2026-11-08T00:00:00" → "2026-11-08" */
 const data = (v?: string | null) => (v ? v.slice(0, 10) : null);
 
-async function atualizarMunicipais(empresaId: number) {
+async function atualizarMunicipais(empresaId: number, progresso: Progresso) {
   const ctx = await montarContexto(empresaId);
   const cMun = ctx.prestador.codigo_municipio;
   if (!cMun) throw new Error('Informe o município do prestador em Configurações › Prestador.');
@@ -238,10 +243,14 @@ async function atualizarMunicipais(empresaId: number) {
   const agora = dataHoraMysql();
   const linhas: unknown[][] = [];
   const fila = nacionais.map((n) => String(n.codigo));
+  let feitos = 0;
+  const etapa = `Consultando no ADN os serviços de ${ctx.prestador.municipio || cMun}…`;
+  progresso(etapa, 0, nacionais.length);
   // A resposta vem por código de 9 dígitos: se o município tiver códigos próprios, eles vêm junto
   const consultar = async () => {
     for (let codigo = fila.shift(); codigo; codigo = fila.shift()) {
       const aliquotas = await consultarAliquotaMunicipal(ctx, cMun, codigo, hoje);
+      progresso(etapa, ++feitos, nacionais.length);
       for (const [servico, vigencias] of Object.entries(aliquotas ?? {})) {
         const v = [...vigencias].sort((a, b) => a.DtIni.localeCompare(b.DtIni)).pop();
         if (v) linhas.push([cMun, servico.replace(/\D/g, '').padEnd(9, '0'), v.Incidencia, v.Aliq, data(v.DtIni), data(v.DtFim), agora, agora]);
@@ -251,6 +260,7 @@ async function atualizarMunicipais(empresaId: number) {
   await Promise.all(Array.from({ length: PARALELAS }, consultar));
   if (!linhas.length) throw new Error(`O município ${cMun} não tem nenhum serviço parametrizado no ADN: nada foi gravado.`);
 
+  progresso(`Gravando ${linhas.length} serviços do município…`);
   await gravar([
     {
       apagar: 'DELETE FROM nfs_servicos_municipais WHERE codigo_municipio = ?',

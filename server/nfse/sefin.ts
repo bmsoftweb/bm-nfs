@@ -243,11 +243,3 @@ export async function consultarAliquotaMunicipal(
   if (r.status !== 200 || !json?.aliquotas) throw new Error(`ADN (parâmetros municipais, ${servico}): HTTP ${r.status} ${json?.mensagem || ''}`.trim());
   return json.aliquotas;
 }
-
-/** GET {adn}/danfse/{chave} — PDF cru, ou JSON de erro */
-export async function obterDanfse(ctx: Contexto, chave: string): Promise<{ url: string; pdf?: Buffer; retorno?: RetornoSefin }> {
-  const url = `${urls(ctx).adn}/danfse/${chave}`;
-  const r = await requisitar(ctx, 'GET', url);
-  if (r.corpo.subarray(0, 5).toString('latin1') === '%PDF-') return { url, pdf: r.corpo };
-  return { url, retorno: interpretar(r) };
-}

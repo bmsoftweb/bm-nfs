@@ -7,6 +7,7 @@ import { BotaoAcao, MenuAcoes, SeparadorAcoes } from './MenuAcoes';
 import { NovaNFSeView } from './NovaNFSeView';
 import { Area, Botao, Confirmacao, Etiqueta, Secao, Selecao } from './ui';
 import { AvisoErro, AvisoSucesso } from './AvisoErro';
+import { useProgresso } from './ProgressoModal';
 import { AMBIENTES, SITUACOES, formatarChave, formatarCpfCnpj, formatarData, formatarDataHora, formatarMoeda } from '../utils/formatters';
 
 type Aba = { id: string; titulo: string; notaId?: number; copia?: DadosNFSe | null };
@@ -34,6 +35,7 @@ export const NotasView: React.FC<{ onMudou: () => void }> = ({ onMudou }) => {
   const [ocupado, setOcupado] = useState<string | null>(null);
   const [cancelando, setCancelando] = useState<NotaLista | null>(null);
   const [transmitindo, setTransmitindo] = useState<NotaLista | null>(null);
+  const progresso = useProgresso();
 
   const abrir = (aba: Aba) => {
     setAbas((a) => (a.some((x) => x.id === aba.id) ? a : [...a, aba]));
@@ -73,7 +75,7 @@ export const NotasView: React.FC<{ onMudou: () => void }> = ({ onMudou }) => {
 
   const consultar = (n: NotaLista) =>
     executar(`consultar-${n.id}`, async () => {
-      const r = await api.consultarNota(n.id);
+      const r = await progresso.aguardar('Consultando a NFS-e', 'Perguntando à Sefin Nacional…', () => api.consultarNota(n.id));
       atualizou(r.nota.situacao === 'autorizada' ? `NFS-e ${r.nota.numero_nfse ?? ''} autorizada.` : 'Consulta concluída.');
     });
 
@@ -81,7 +83,9 @@ export const NotasView: React.FC<{ onMudou: () => void }> = ({ onMudou }) => {
     setTransmitindo(null);
     return executar(`transmitir-${n.id}`, async () => {
       try {
-        const { nota } = await api.transmitirNota(n.id);
+        const { nota } = await progresso.aguardar('Transmitindo a NFS-e', 'Assinando e enviando a DPS à Sefin Nacional…', () =>
+          api.transmitirNota(n.id),
+        );
         if (nota.situacao === 'rejeitada') throw new Error(`NFS-e rejeitada pela Sefin Nacional:\n${nota.motivo || ''}`);
         setFeito(
           nota.situacao === 'autorizada'
@@ -94,6 +98,9 @@ export const NotasView: React.FC<{ onMudou: () => void }> = ({ onMudou }) => {
       }
     });
   };
+
+  const abrirDanfse = (id: number) =>
+    executar(`danfse-${id}`, () => progresso.aguardar('Abrindo o DANFSe', 'Gerando o PDF…', () => api.abrirDanfse(id)));
 
   const copiar = (n: NotaLista) =>
     executar(`copiar-${n.id}`, async () => {
@@ -130,9 +137,9 @@ export const NotasView: React.FC<{ onMudou: () => void }> = ({ onMudou }) => {
         <BotaoAcao
           icone={Printer}
           titulo="DANFSe"
-          descricao="PDF oficial gerado pelo Ambiente Nacional"
+          descricao="PDF no leiaute da NT 008"
           carregando={ocupado === `danfse-${n.id}`}
-          onClick={() => executar(`danfse-${n.id}`, () => api.abrirDanfse(n.id))}
+          onClick={() => abrirDanfse(n.id)}
         />
       )}
       <BotaoAcao icone={FileCode2} titulo="Baixar XML" descricao="XML da NFS-e ou da DPS" onClick={() => executar(`xml-${n.id}`, () => api.baixarXml(n.id))} />
@@ -156,6 +163,7 @@ export const NotasView: React.FC<{ onMudou: () => void }> = ({ onMudou }) => {
     <div className="flex-1 flex flex-col min-h-0">
       {erro && <AvisoErro mensagem={erro} onFechar={() => setErro(null)} />}
       {feito && <AvisoSucesso mensagem={feito} onFechar={() => setFeito(null)} />}
+      {progresso.modal}
 
       {abas.length > 0 && (
         <div className="flex items-stretch bg-stone-100 dark:bg-stone-950 border-b border-stone-200 dark:border-stone-800 overflow-x-auto overflow-y-hidden shrink-0">
@@ -220,7 +228,7 @@ export const NotasView: React.FC<{ onMudou: () => void }> = ({ onMudou }) => {
               notaId={aba.notaId!}
               versao={recarregar}
               ocupado={ocupado}
-              onDanfse={(id) => executar(`danfse-${id}`, () => api.abrirDanfse(id))}
+              onDanfse={abrirDanfse}
               onXml={(id) => executar(`xml-${id}`, () => api.baixarXml(id))}
               onConsultar={consultar}
               onTransmitir={setTransmitindo}
@@ -418,6 +426,7 @@ const DialogoCancelamento: React.FC<{ nota: NotaLista; onFechar: () => void; onC
   const [motivo, setMotivo] = useState('');
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const progresso = useProgresso();
 
   useEffect(() => {
     const tecla = (e: KeyboardEvent) => e.key === 'Escape' && !enviando && onFechar();
@@ -429,7 +438,9 @@ const DialogoCancelamento: React.FC<{ nota: NotaLista; onFechar: () => void; onC
     setEnviando(true);
     setErro(null);
     try {
-      await api.cancelarNota(nota.id, codigo, motivo);
+      await progresso.aguardar('Cancelando a NFS-e', 'Enviando o evento de cancelamento à Sefin Nacional…', () =>
+        api.cancelarNota(nota.id, codigo, motivo),
+      );
       onCancelada();
     } catch (err: any) {
       setErro(err.message);
@@ -443,6 +454,7 @@ const DialogoCancelamento: React.FC<{ nota: NotaLista; onFechar: () => void; onC
   return (
     <div className="fixed inset-0 z-50 bg-stone-900/50 backdrop-blur-[2px] flex items-center justify-center p-4">
       {erro && <AvisoErro mensagem={erro} onFechar={() => setErro(null)} />}
+      {progresso.modal}
       <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl shadow-2xl w-full max-w-lg">
         <div className="px-5 py-4 flex items-start justify-between gap-3">
           <div>

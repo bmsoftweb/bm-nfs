@@ -30,7 +30,11 @@ function conferirSessao(status: number, mensagem: string) {
 }
 
 async function pedir<T>(rota: string, opcoes: RequestInit = {}): Promise<T> {
-  const resposta = await fetch(`/api${rota}`, { ...opcoes, headers: { ...cabecalhos(), ...opcoes.headers } });
+  return lerResposta<T>(await fetch(`/api${rota}`, { ...opcoes, headers: { ...cabecalhos(), ...opcoes.headers } }));
+}
+
+/** Corpo JSON da resposta; erro vira exceção com a mensagem do servidor */
+async function lerResposta<T>(resposta: Response): Promise<T> {
   const texto = await resposta.text();
 
   let corpo: any = null;
@@ -55,6 +59,35 @@ async function pedir<T>(rota: string, opcoes: RequestInit = {}): Promise<T> {
 
 const post = <T>(rota: string, corpo?: any) =>
   pedir<T>(rota, { method: 'POST', body: JSON.stringify(corpo ?? {}) });
+
+/** Andamento de uma ação longa (rotaProgresso no servidor) */
+export interface Andamento {
+  etapa: string;
+  feitos: number;
+  total: number;
+}
+
+/** POST numa rota com progresso: chama aoAvancar a cada etapa e devolve o resultado final */
+async function enviarComProgresso<T>(rota: string, aoAvancar: (a: Andamento) => void): Promise<T> {
+  const resposta = await fetch(`/api${rota}`, { method: 'POST', headers: cabecalhos(), body: '{}' });
+  // Sessão vencida e afins chegam como JSON comum, antes do streaming começar
+  if (!resposta.ok || !resposta.body) return lerResposta<T>(resposta);
+  const leitor = resposta.body.pipeThrough(new TextDecoderStream()).getReader();
+  let resto = '';
+  for (;;) {
+    const { value, done } = await leitor.read();
+    resto += value ?? '';
+    const linhas = resto.split('\n');
+    resto = done ? '' : (linhas.pop() ?? '');
+    for (const l of linhas.filter(Boolean)) {
+      const o = JSON.parse(l);
+      if (o.erro) throw new Error(o.erro);
+      if ('ok' in o) return o.ok as T;
+      aoAvancar(o as Andamento);
+    }
+    if (done) throw new Error('A conexão terminou antes do fim da rotina.');
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Sessão e painel
@@ -179,7 +212,9 @@ export interface CodigoMunicipal {
 }
 
 export const buscarTabelas = () => pedir<SituacaoTabela[]>('/tabelas');
-export const atualizarTabela = (nome: SituacaoTabela['nome']) => post<{ total: number; versao: string }>(`/tabelas/${nome}/atualizar`);
+/** Rota com andamento: o ProgressoModal mostra a contagem enquanto a tabela é baixada */
+export const atualizarTabela = (nome: SituacaoTabela['nome'], aoAvancar: (a: Andamento) => void) =>
+  enviarComProgresso<{ total: number; versao: string }>(`/tabelas/${nome}/atualizar`, aoAvancar);
 export const listarNacionais = (c: ConsultaGrade) => pedir<PaginaGrade<any>>(`/tabelas/nacionais?${paraQuery(c)}`);
 export const listarNbs = (c: ConsultaGrade) => pedir<PaginaGrade<any>>(`/tabelas/nbs?${paraQuery(c)}`);
 export const listarMunicipais = (c: ConsultaGrade) => pedir<PaginaGrade<any>>(`/tabelas/municipais?${paraQuery(c)}`);
