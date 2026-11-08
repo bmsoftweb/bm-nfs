@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Send } from 'lucide-react';
+import { Save, Send } from 'lucide-react';
 import * as api from '../services/api';
 import { DadosNFSe, ErroApi, Tomador } from '../types';
 import { Area, Botao, Campo, Secao, Texto } from './ui';
@@ -39,7 +39,7 @@ export const NovaNFSeView: React.FC<{
 }> = ({ inicial, onEmitida, onCancelar }) => {
   const [dados, setDados] = useState<DadosNFSe | null>(null);
   const [erro, setErro] = useState<string | null>(null);
-  const [enviando, setEnviando] = useState(false);
+  const [enviando, setEnviando] = useState<'gravar' | 'emitir' | null>(null);
   const codigos = useCodigosServico(dados?.codigoServico ?? '');
 
   useEffect(() => {
@@ -86,15 +86,19 @@ export const NovaNFSeView: React.FC<{
   const base = Math.max(0, Number(dados.valorServico) - Number(dados.descontoIncondicionado || 0));
   const iss = Math.round(base * Number(dados.aliquotaIss || 0)) / 100;
 
-  const emitir = async (e: React.FormEvent) => {
+  const emitir = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    // O Enter num campo aciona o primeiro botão de envio, que é o Gravar: nunca transmite sem querer
+    const soGravar = ((e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null)?.value === 'gravar';
     setErro(null);
-    setEnviando(true);
+    setEnviando(soGravar ? 'gravar' : 'emitir');
     try {
       // Sem nome nem documento, a nota sai sem tomador
       const comTomador = t.documento || t.nome;
-      const { nota } = await api.emitirNota({ ...dados, tomador: comTomador ? t : null });
-      if (nota.situacao === 'rejeitada') {
+      const { nota } = await api.emitirNota({ ...dados, tomador: comTomador ? t : null }, soGravar);
+      if (soGravar) {
+        onEmitida(nota.id, `DPS ${nota.serie}/${nota.numero_dps} gravada. Transmita quando quiser.`);
+      } else if (nota.situacao === 'rejeitada') {
         setErro(`NFS-e rejeitada pela Sefin Nacional:\n${nota.motivo || ''}`);
       } else {
         onEmitida(
@@ -107,7 +111,7 @@ export const NovaNFSeView: React.FC<{
     } catch (err: any) {
       setErro(mensagemDe(err));
     } finally {
-      setEnviando(false);
+      setEnviando(null);
     }
   };
 
@@ -237,7 +241,17 @@ export const NovaNFSeView: React.FC<{
 
       <div className="px-4 py-3 border-b border-stone-200 dark:border-stone-800 flex items-center justify-end gap-2.5 bg-stone-50 dark:bg-stone-950/40">
         <Botao onClick={onCancelar}>Cancelar</Botao>
-        <Botao type="submit" variante="primario" icone={<Send className="w-3.5 h-3.5" />} carregando={enviando}>
+        <Botao
+          type="submit"
+          value="gravar"
+          icone={<Save className="w-3.5 h-3.5" />}
+          carregando={enviando === 'gravar'}
+          disabled={!!enviando}
+          title="Grava a nota assinada, sem enviar: transmita depois pela lista"
+        >
+          Gravar
+        </Botao>
+        <Botao type="submit" variante="primario" icone={<Send className="w-3.5 h-3.5" />} carregando={enviando === 'emitir'} disabled={!!enviando}>
           Emitir NFS-e
         </Botao>
       </div>

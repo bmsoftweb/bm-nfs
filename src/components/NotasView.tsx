@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Ban, Copy, ExternalLink, Eye, FileCode2, FileText, Plus, Printer, RefreshCw, X } from 'lucide-react';
+import { Ban, Copy, ExternalLink, Eye, FileCode2, FileText, Plus, Printer, RefreshCw, Send, X } from 'lucide-react';
 import * as api from '../services/api';
 import { DadosNFSe, NotaDetalhe, NotaLista } from '../types';
 import { ColunaGrade, Grade } from './Grade';
 import { BotaoAcao, MenuAcoes, SeparadorAcoes } from './MenuAcoes';
 import { NovaNFSeView } from './NovaNFSeView';
-import { Area, Botao, Etiqueta, Secao, Selecao } from './ui';
+import { Area, Botao, Confirmacao, Etiqueta, Secao, Selecao } from './ui';
 import { AvisoErro, AvisoSucesso } from './AvisoErro';
 import { AMBIENTES, SITUACOES, formatarChave, formatarCpfCnpj, formatarData, formatarDataHora, formatarMoeda } from '../utils/formatters';
 
@@ -17,6 +17,9 @@ const situacao = (s: string) => {
   const x = SITUACOES[s] || SITUACOES.pendente;
   return <Etiqueta texto={x.rotulo} classe={x.classe} />;
 };
+
+/** Só o que já foi enviado tem o que consultar */
+const consultavel = (s: string) => s === 'pendente' || s === 'autorizada';
 
 /**
  * Notas de serviço: a grade, e em abas filhas a Nova NFS-e e cada nota aberta.
@@ -30,6 +33,7 @@ export const NotasView: React.FC<{ onMudou: () => void }> = ({ onMudou }) => {
   const [feito, setFeito] = useState<string | null>(null);
   const [ocupado, setOcupado] = useState<string | null>(null);
   const [cancelando, setCancelando] = useState<NotaLista | null>(null);
+  const [transmitindo, setTransmitindo] = useState<NotaLista | null>(null);
 
   const abrir = (aba: Aba) => {
     setAbas((a) => (a.some((x) => x.id === aba.id) ? a : [...a, aba]));
@@ -73,6 +77,24 @@ export const NotasView: React.FC<{ onMudou: () => void }> = ({ onMudou }) => {
       atualizou(r.nota.situacao === 'autorizada' ? `NFS-e ${r.nota.numero_nfse ?? ''} autorizada.` : 'Consulta concluída.');
     });
 
+  const transmitir = (n: NotaLista) => {
+    setTransmitindo(null);
+    return executar(`transmitir-${n.id}`, async () => {
+      try {
+        const { nota } = await api.transmitirNota(n.id);
+        if (nota.situacao === 'rejeitada') throw new Error(`NFS-e rejeitada pela Sefin Nacional:\n${nota.motivo || ''}`);
+        setFeito(
+          nota.situacao === 'autorizada'
+            ? `NFS-e ${nota.numero_nfse ?? ''} autorizada.`
+            : 'DPS enviada; a autorização ainda não foi confirmada. Use Consultar.',
+        );
+      } finally {
+        // Autorizada, rejeitada ou pendente: a situação mudou de qualquer jeito
+        atualizou();
+      }
+    });
+  };
+
   const copiar = (n: NotaLista) =>
     executar(`copiar-${n.id}`, async () => {
       const completa = await api.buscarNota(n.id);
@@ -114,7 +136,10 @@ export const NotasView: React.FC<{ onMudou: () => void }> = ({ onMudou }) => {
         />
       )}
       <BotaoAcao icone={FileCode2} titulo="Baixar XML" descricao="XML da NFS-e ou da DPS" onClick={() => executar(`xml-${n.id}`, () => api.baixarXml(n.id))} />
-      {n.situacao !== 'cancelada' && n.situacao !== 'rejeitada' && (
+      {n.situacao === 'assinada' && (
+        <BotaoAcao icone={Send} titulo="Transmitir" descricao="Enviar a DPS gravada à Sefin Nacional" carregando={ocupado === `transmitir-${n.id}`} onClick={() => setTransmitindo(n)} />
+      )}
+      {consultavel(n.situacao) && (
         <BotaoAcao icone={RefreshCw} titulo="Consultar" descricao="Situação na Sefin Nacional" carregando={ocupado === `consultar-${n.id}`} onClick={() => consultar(n)} />
       )}
       <BotaoAcao icone={Copy} titulo="Copiar" descricao="Nova NFS-e com os mesmos dados" onClick={() => copiar(n)} />
@@ -198,6 +223,7 @@ export const NotasView: React.FC<{ onMudou: () => void }> = ({ onMudou }) => {
               onDanfse={(id) => executar(`danfse-${id}`, () => api.abrirDanfse(id))}
               onXml={(id) => executar(`xml-${id}`, () => api.baixarXml(id))}
               onConsultar={consultar}
+              onTransmitir={setTransmitindo}
               onCopiar={copiar}
               onCancelar={setCancelando}
             />
@@ -225,6 +251,21 @@ export const NotasView: React.FC<{ onMudou: () => void }> = ({ onMudou }) => {
         />
       </div>
 
+      <Confirmacao
+        aberto={!!transmitindo}
+        titulo={`Transmitir a DPS ${transmitindo?.serie}/${transmitindo?.numero_dps}?`}
+        mensagem={
+          `${transmitindo?.tomador_nome || 'Sem tomador'} • ${formatarMoeda(transmitindo?.valor_servico)}. ` +
+          (Number(transmitindo?.ambiente) === 1
+            ? 'Ambiente de Produção: a NFS-e sai com valor fiscal.'
+            : 'Ambiente de Produção restrita: a nota não tem valor fiscal.')
+        }
+        rotuloConfirmar="Transmitir"
+        perigo={false}
+        onConfirmar={() => transmitindo && transmitir(transmitindo)}
+        onCancelar={() => setTransmitindo(null)}
+      />
+
       {cancelando && (
         <DialogoCancelamento
           nota={cancelando}
@@ -250,9 +291,10 @@ const DetalheNota: React.FC<{
   onDanfse: (id: number) => void;
   onXml: (id: number) => void;
   onConsultar: (n: NotaLista) => void;
+  onTransmitir: (n: NotaLista) => void;
   onCopiar: (n: NotaLista) => void;
   onCancelar: (n: NotaLista) => void;
-}> = ({ notaId, versao, ocupado, onDanfse, onXml, onConsultar, onCopiar, onCancelar }) => {
+}> = ({ notaId, versao, ocupado, onDanfse, onXml, onConsultar, onTransmitir, onCopiar, onCancelar }) => {
   const [nota, setNota] = useState<NotaDetalhe | null>(null);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -292,7 +334,12 @@ const DetalheNota: React.FC<{
               </Botao>
             )}
             <Botao icone={<FileCode2 className="w-3.5 h-3.5" />} onClick={() => onXml(nota.id)}>XML</Botao>
-            {nota.situacao !== 'cancelada' && nota.situacao !== 'rejeitada' && (
+            {nota.situacao === 'assinada' && (
+              <Botao variante="primario" icone={<Send className="w-3.5 h-3.5" />} carregando={ocupado === `transmitir-${nota.id}`} onClick={() => onTransmitir(nota)}>
+                Transmitir
+              </Botao>
+            )}
+            {consultavel(nota.situacao) && (
               <Botao icone={<RefreshCw className="w-3.5 h-3.5" />} carregando={ocupado === `consultar-${nota.id}`} onClick={() => onConsultar(nota)}>
                 Consultar
               </Botao>

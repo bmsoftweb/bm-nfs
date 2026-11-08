@@ -88,7 +88,10 @@ export const removerCertificado = () => pedir<{ success: boolean }>('/certificad
 // Notas
 // ---------------------------------------------------------------------------
 
-export const emitirNota = (dados: DadosNFSe) => post<{ success: boolean; nota: NotaDetalhe & { erros: any[]; alertas: any[] } }>('/notas', dados);
+type RespostaEnvio = { success: boolean; nota: NotaDetalhe & { erros: any[]; alertas: any[] } };
+/** Grava e transmite; `soGravar` deixa a nota assinada para transmitir depois */
+export const emitirNota = (dados: DadosNFSe, soGravar = false) => post<RespostaEnvio>(soGravar ? '/notas?gravar=1' : '/notas', dados);
+export const transmitirNota = (id: number) => post<RespostaEnvio>(`/notas/${id}/transmitir`);
 export const buscarNota = (id: number) => pedir<NotaDetalhe>(`/notas/${id}`);
 export const consultarNota = (id: number) => post<{ success: boolean; nota: NotaLista }>(`/notas/${id}/consultar`);
 export const cancelarNota = (id: number, codigoMotivo: string, motivo: string) =>

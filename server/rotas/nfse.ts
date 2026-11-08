@@ -9,7 +9,7 @@ import { carregarPrestador, esquecerCertificado, linhaCertificado } from '../nfs
 import { carregarPfx } from '../nfse/certificado.js';
 import { dataHoraMysql, paraBR } from '../nfse/datas.js';
 import { FalhaSchema } from '../nfse/validacao.js';
-import { buscarNota, cancelar, consultar, danfse, emitir } from '../nfse/operacoes.js';
+import { buscarNota, cancelar, consultar, danfse, gravar, transmitir } from '../nfse/operacoes.js';
 import { urlConsultaPublica } from '../nfse/sefin.js';
 import { atualizarTabela, codigosDoServico, codigosNacionais, situacaoTabelas } from '../tabelas.js';
 
@@ -180,8 +180,15 @@ export function criarRotasNFSe(): Router {
     res.json({ ...nota, dados, eventos, linkConsulta: nota.chave ? urlConsultaPublica(nota.ambiente, nota.chave) : null });
   }));
 
+  /** Grava e transmite (Emitir); com ?gravar=1 só grava, para transmitir depois */
   r.post('/notas', rota(async (req, res) => {
-    res.json({ success: true, nota: await emitir(empresaDaRequisicao(req), req.body || {}) });
+    const empresaId = empresaDaRequisicao(req);
+    const nota = await gravar(empresaId, req.body || {});
+    res.json({ success: true, nota: req.query.gravar === '1' ? nota : await transmitir(empresaId, nota.id) });
+  }));
+
+  r.post('/notas/:id/transmitir', rota(async (req, res) => {
+    res.json({ success: true, nota: await transmitir(empresaDaRequisicao(req), Number(req.params.id)) });
   }));
 
   r.post('/notas/:id/consultar', rota(async (req, res) => {

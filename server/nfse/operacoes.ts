@@ -2,8 +2,8 @@
  * Emissão, consulta, cancelamento e DANFSe, com o registro em nfs_notas,
  * nfs_eventos e nfs_log.
  *
- * Situações da nota: pendente (enviada sem resposta conclusiva: consultar),
- * autorizada, rejeitada, cancelada.
+ * Situações da nota: assinada (gravada, ainda não enviada: transmitir),
+ * pendente (enviada sem resposta conclusiva: consultar), autorizada, rejeitada, cancelada.
  */
 import { pool } from '../db.js';
 import { assinar } from './assinatura.js';
@@ -89,7 +89,8 @@ async function gravarAutorizada(notaId: number, xmlNfse: string, chaveResposta: 
 // Emissão
 // ---------------------------------------------------------------------------
 
-export async function emitir(empresaId: number, dados: DadosNFSe) {
+/** Grava a nota assinada, sem enviar: o número da DPS já fica reservado no ambiente da configuração */
+export async function gravar(empresaId: number, dados: DadosNFSe) {
   const ctx = await montarContexto(empresaId);
   const erro = conferirDados(dados);
   if (erro) throw new Error(erro);
@@ -112,7 +113,7 @@ export async function emitir(empresaId: number, dados: DadosNFSe) {
        (empresa_id, ambiente, serie, numero_dps, id_dps, situacao, data_emissao, competencia,
         tomador_documento, tomador_nome, codigo_servico, valor_servico, aliquota_iss, iss_retido,
         dados, xml_dps, criado_em)
-     VALUES (?, ?, ?, ?, ?, 'pendente', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, 'assinada', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       empresaId, ambiente, serie, numero, dps.id, dataHoraMysql(dps.dataEmissao), dados.competencia,
       t?.nome ? String(t.documento).replace(/\D/g, '') : null, t?.nome || null,
@@ -120,7 +121,30 @@ export async function emitir(empresaId: number, dados: DadosNFSe) {
       JSON.stringify(dados), xmlDps, dataHoraMysql(),
     ],
   );
-  const notaId = Number(ins.insertId);
+  return buscarNota(empresaId, Number(ins.insertId));
+}
+
+/**
+ * Envia uma nota gravada. A DPS é remontada e assinada de novo com a hora do envio
+ * (a do gravar pode ter ficado para trás) e com a configuração atual do prestador;
+ * série, número e ambiente continuam os da nota.
+ */
+export async function transmitir(empresaId: number, notaId: number) {
+  const nota = await buscarNota(empresaId, notaId);
+  if (nota.situacao !== 'assinada') throw new Error('Só uma nota gravada e ainda não enviada pode ser transmitida.');
+  const ctx = await contextoDaNota(empresaId, nota);
+  const dados: DadosNFSe = typeof nota.dados === 'string' ? JSON.parse(nota.dados) : nota.dados;
+  const erro = conferirDados(dados);
+  if (erro) throw new Error(erro);
+
+  const dps = montarDps(ctx, Number(nota.serie), Number(nota.numero_dps), dados);
+  const xmlDps = assinar(dps.xml, 'infDPS', dps.id, ctx.certificado);
+  exigirValido(await validarDps(xmlDps, ctx.config.webservice.ambiente), 'Falha na validação da DPS.');
+
+  // Pendente antes de enviar: se a resposta não chegar, o Consultar pela DPS resolve
+  await pool.query(`UPDATE nfs_notas SET situacao = 'pendente', data_emissao = ?, xml_dps = ?, atualizado_em = ? WHERE id = ?`, [
+    dataHoraMysql(dps.dataEmissao), xmlDps, dataHoraMysql(), notaId,
+  ]);
 
   let chamada: sefin.Chamada;
   try {
